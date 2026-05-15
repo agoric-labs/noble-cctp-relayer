@@ -3,6 +3,7 @@ package ethereum
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"os"
@@ -19,6 +20,33 @@ import (
 	"github.com/strangelove-ventures/noble-cctp-relayer/relayer"
 	"github.com/strangelove-ventures/noble-cctp-relayer/types"
 )
+
+// logBurnParsed emits a structured "burn.parsed" log line covering everything
+// we know about a decoded CCTP burn. Runs for every burn the listener sees,
+// independent of mode (watch-only or full relay).
+func logBurnParsed(logger log.Logger, msg *types.MessageState, blockNumber uint64) {
+	fields := []any{
+		"tx", msg.SourceTxHash,
+		"block", blockNumber,
+		"msg_version", msg.MsgVersion,
+		"src_domain", msg.SourceDomain,
+		"dest_domain", msg.DestDomain,
+		"dest_caller", "0x" + hex.EncodeToString(msg.DestinationCaller),
+		"nonce", msg.Nonce,
+		"msg_sent_bytes_len", len(msg.MsgSentBytes),
+		"msg_body_len", len(msg.MsgBody),
+	}
+	if bm, err := new(types.BurnMessage).Parse(msg.MsgBody); err == nil {
+		fields = append(fields,
+			"burn_version", bm.Version,
+			"burn_token", "0x"+hex.EncodeToString(bm.BurnToken),
+			"mint_recipient", "0x"+hex.EncodeToString(bm.MintRecipient),
+			"amount", bm.Amount.String(),
+			"message_sender", "0x"+hex.EncodeToString(bm.MessageSender),
+		)
+	}
+	logger.Info("burn.parsed", fields...)
+}
 
 // errSignal allows broadcasting an error value to multiple receivers.
 type errSignal struct {
@@ -215,6 +243,7 @@ func consumeHistory(
 			continue
 		}
 		logger.Info(fmt.Sprintf("New historical msg from source domain %d with tx hash %s", parsedMsg.SourceDomain, parsedMsg.SourceTxHash))
+		logBurnParsed(logger, parsedMsg, historicalLog.BlockNumber)
 
 		processingQueue <- &types.TxState{TxHash: parsedMsg.SourceTxHash, Msgs: []*types.MessageState{parsedMsg}}
 	}
@@ -248,6 +277,7 @@ func (e *Ethereum) consumeStream(
 				continue
 			}
 			logger.Info(fmt.Sprintf("New stream msg from %d with tx hash %s", parsedMsg.SourceDomain, parsedMsg.SourceTxHash))
+			logBurnParsed(logger, parsedMsg, streamLog.BlockNumber)
 
 			switch {
 			case txState == nil:
@@ -357,7 +387,14 @@ func (e *Ethereum) TrackLatestBlockHeight(ctx context.Context, logger log.Logger
 		if err != nil {
 			logger.Error("Unable to query latest height", "err", err)
 		} else {
+			prev := e.LatestBlock()
 			e.SetLatestBlock(res)
+			// Only log forward progress, so repeated polls of the same
+			// head don't spam. This is the poll-only height log the
+			// operator can use to confirm the listener is alive.
+			if res != prev {
+				logger.Info("block.received", "chain", e.name, "domain", e.domain, "block", res)
+			}
 			if m != nil {
 				m.SetLatestHeight(e.name, d, int64(res))
 			}
@@ -417,4 +454,32 @@ func (e *Ethereum) WalletBalanceMetric(ctx context.Context, logger log.Logger, m
 			return
 		}
 	}
+}
+
+// LogMinterBalance logs the configured minter address and its current native
+// gas balance. No-op when no minter key is configured (watch-only mode).
+func (e *Ethereum) LogMinterBalance(ctx context.Context, logger log.Logger) {
+	if e.minterAddress == "" {
+		return
+	}
+	account := common.HexToAddress(e.minterAddress)
+	balance, err := e.rpcClient.BalanceAt(ctx, account, nil)
+	if err != nil {
+		logger.Error("Unable to query minter balance at startup",
+			"chain", e.name, "domain", e.domain, "minter", e.minterAddress, "err", err)
+		return
+	}
+	scaled := "n/a"
+	if e.MetricsExponent > 0 {
+		scaleFactor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(e.MetricsExponent)), nil))
+		f, _ := new(big.Float).Quo(new(big.Float).SetInt(balance), scaleFactor).Float64()
+		scaled = fmt.Sprintf("%.6f %s", f, e.MetricsDenom)
+	}
+	logger.Info("minter.balance",
+		"chain", e.name,
+		"domain", e.domain,
+		"minter", e.minterAddress,
+		"balance_wei", balance.String(),
+		"balance", scaled,
+	)
 }

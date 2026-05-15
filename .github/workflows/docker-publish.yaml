@@ -1,22 +1,14 @@
-name: Create and publish a Docker image
-
-on:
-  push:
-    tags:
-    - '**'
-    branches:
-    - '**'
-
 env:
-  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-push-image:
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -31,12 +23,12 @@ jobs:
       - name: Log in to the Container registry
         uses: docker/login-action@v2
         with:
+          password: ${{ secrets.GITHUB_TOKEN }}
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
+      - id: meta
+        name: Extract metadata (tags, labels) for Docker
         uses: docker/metadata-action@v4
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -44,10 +36,17 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
+          build-args: GITAUTH="${{ secrets.GITAUTH }}"
           context: .
-          platforms: linux/amd64,linux/arm64
           file: Dockerfile
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: GITAUTH="${{ secrets.GITAUTH }}"
+
+name: Create and publish a Docker image
+
+on:
+  push:
+    branches:
+      - main

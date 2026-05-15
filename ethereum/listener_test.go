@@ -20,7 +20,7 @@ func TestStartListener(t *testing.T) {
 	ethConfig.StartBlock = 9702735
 	ethConfig.LookbackPeriod = 0
 
-	eth, err := ethConfig.Chain("ethereum")
+	eth, err := ethConfig.Chain("ethereum", false)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

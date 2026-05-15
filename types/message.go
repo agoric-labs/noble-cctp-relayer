@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/big"
 )
 
@@ -40,36 +41,88 @@ type MetadataMessage struct {
 	Memo      string
 }
 
-//
-
+// Parse decodes a CCTP MessageSent envelope. Auto-detects v1 vs v2 from the
+// 4-byte leading version field: v1 has a 116-byte header, v2 has a 148-byte
+// header (the nonce expands from uint64 to bytes32 and two finality fields
+// are appended). The shared sender/recipient/destCaller layout is otherwise
+// identical, just at different offsets.
 func (msg *Message) Parse(bz []byte) (*Message, error) {
 	const (
 		VersionIndex           = 0
 		SourceDomainIndex      = 4
 		DestinationDomainIndex = 8
 		NonceIndex             = 12
-		SenderIndex            = 20
-		RecipientIndex         = 52
-		DestinationCallerIndex = 84
-		MessageBodyIndex       = 116
 	)
 
-	if len(bz) < MessageBodyIndex {
-		return nil, errors.New("")
+	if len(bz) < SourceDomainIndex {
+		return nil, fmt.Errorf("CCTP Message too short: %d bytes", len(bz))
 	}
-
 	msg.Version = binary.BigEndian.Uint32(bz[VersionIndex:SourceDomainIndex])
-	msg.SourceDomain = binary.BigEndian.Uint32(bz[SourceDomainIndex:DestinationDomainIndex])
-	msg.DestinationDomain = binary.BigEndian.Uint32(bz[DestinationDomainIndex:NonceIndex])
-	msg.Nonce = binary.BigEndian.Uint64(bz[NonceIndex:SenderIndex])
-	msg.Sender = bz[SenderIndex:RecipientIndex]
-	msg.Recipient = bz[RecipientIndex:DestinationCallerIndex]
-	msg.DestinationCaller = bz[DestinationCallerIndex:MessageBodyIndex]
-	msg.MessageBody = bz[MessageBodyIndex:]
+
+	switch msg.Version {
+	case 0:
+		const (
+			SenderIndex            = 20
+			RecipientIndex         = 52
+			DestinationCallerIndex = 84
+			MessageBodyIndex       = 116
+		)
+
+		if len(bz) < MessageBodyIndex {
+			return nil, fmt.Errorf("v1 Message header too short: got %d bytes, need %d", len(bz), MessageBodyIndex)
+		}
+
+		msg.SourceDomain = binary.BigEndian.Uint32(bz[SourceDomainIndex:DestinationDomainIndex])
+		msg.DestinationDomain = binary.BigEndian.Uint32(bz[DestinationDomainIndex:NonceIndex])
+		msg.Nonce = binary.BigEndian.Uint64(bz[NonceIndex:SenderIndex])
+		msg.Sender = bz[SenderIndex:RecipientIndex]
+		msg.Recipient = bz[RecipientIndex:DestinationCallerIndex]
+		msg.DestinationCaller = bz[DestinationCallerIndex:MessageBodyIndex]
+		msg.MessageBody = bz[MessageBodyIndex:]
+	case 1:
+		// v2 layout:
+		//   0-3   version                     uint32
+		//   4-7   sourceDomain                uint32
+		//   8-11  destinationDomain           uint32
+		//   12-43 nonce                       bytes32  (typically zero; identity is by hash)
+		//   44-75 sender                      bytes32
+		//   76-107 recipient                  bytes32
+		//   108-139 destinationCaller         bytes32
+		//   140-143 minFinalityThreshold      uint32
+		//   144-147 finalityThresholdExecuted uint32
+		//   148+  messageBody                 bytes
+		const (
+			SenderIndex               = 44
+			RecipientIndex            = 76
+			DestinationCallerIndex    = 108
+			MinFinalityThresholdIndex = 140
+			MessageBodyIndex          = 148
+		)
+
+		if len(bz) < MessageBodyIndex {
+			return nil, fmt.Errorf("v2 Message header too short: got %d bytes, need %d", len(bz), MessageBodyIndex)
+		}
+
+		msg.SourceDomain = binary.BigEndian.Uint32(bz[SourceDomainIndex:DestinationDomainIndex])
+		msg.DestinationDomain = binary.BigEndian.Uint32(bz[DestinationDomainIndex:NonceIndex])
+		// v2 nonce is bytes32; squeeze the low 8 bytes into our uint64 field.
+		msg.Nonce = binary.BigEndian.Uint64(bz[SenderIndex-8 : SenderIndex])
+		msg.Sender = bz[SenderIndex:RecipientIndex]
+		msg.Recipient = bz[RecipientIndex:DestinationCallerIndex]
+		msg.DestinationCaller = bz[DestinationCallerIndex:MinFinalityThresholdIndex]
+		msg.MessageBody = bz[MessageBodyIndex:]
+	default:
+		return nil, fmt.Errorf("unsupported CCTP message version=%d", msg.Version)
+	}
 
 	return msg, nil
 }
 
+// Parse decodes a CCTP BurnMessage body. The first 132 bytes are identical in
+// v1 and v2; v2 bodies are >= 228 bytes (trailing maxFee/feeExecuted/
+// expirationBlock/hookData fields are ignored — we only need the first 132).
+// We dispatch on body length, not on the embedded version byte, because v2
+// TokenMessenger emits BurnMessage bodies with the version byte still set to 0.
 func (c *BurnMessage) Parse(bz []byte) (*BurnMessage, error) {
 	const (
 		VersionIndex       = 0
@@ -80,15 +133,20 @@ func (c *BurnMessage) Parse(bz []byte) (*BurnMessage, error) {
 		BurnContentLength  = 132
 	)
 
-	if len(bz) != BurnContentLength {
-		return nil, errors.New("")
+	switch {
+	case len(bz) == 132:
+		// v1 burn body
+	case len(bz) > 227:
+		// v2 burn body
+	default:
+		return nil, fmt.Errorf("BurnMessage length %d does not match v1 (=132) or v2 (>=228)", len(bz))
 	}
 
 	c.Version = binary.BigEndian.Uint32(bz[VersionIndex:BurnTokenIndex])
 	c.BurnToken = bz[BurnTokenIndex:MintRecipientIndex]
 	c.MintRecipient = bz[MintRecipientIndex:AmountIndex]
 	c.Amount = new(big.Int).SetBytes(bz[AmountIndex:MsgSenderIndex])
-	c.MessageSender = bz[MsgSenderIndex:]
+	c.MessageSender = bz[MsgSenderIndex:BurnContentLength]
 
 	return c, nil
 }
@@ -104,7 +162,7 @@ func (c *MetadataMessage) Parse(bz []byte) (*MetadataMessage, error) {
 	)
 
 	if len(bz) < MemoIndex {
-		return nil, errors.New("")
+		return nil, errors.New("invalid MetadataMessage length")
 	}
 
 	c.Nonce = binary.BigEndian.Uint64(bz[NonceIndex:SenderIndex])

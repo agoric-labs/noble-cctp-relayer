@@ -239,3 +239,18 @@ func (n *Noble) TrackLatestBlockHeight(ctx context.Context, logger log.Logger, m
 func (n *Noble) WalletBalanceMetric(ctx context.Context, logger log.Logger, m *relayer.PromMetrics) {
 	// Relaying is free. No need to track noble balance.
 }
+
+// LogMinterBalance logs the configured Noble minter address. Noble relaying
+// requires no gas so there is no native balance to fetch; we just surface the
+// configured address for operator verification. No-op in watch-only mode.
+func (n *Noble) LogMinterBalance(_ context.Context, logger log.Logger) {
+	if n.minterAddress == "" {
+		return
+	}
+	logger.Info("minter.balance",
+		"chain", n.Name(),
+		"domain", n.Domain(),
+		"minter", n.minterAddress,
+		"note", "noble relaying is free; no native balance tracked",
+	)
+}

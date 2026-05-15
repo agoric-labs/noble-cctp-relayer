@@ -77,4 +77,12 @@ type Chain interface {
 		logger log.Logger,
 		metrics *relayer.PromMetrics,
 	)
+
+	// LogMinterBalance logs the minter address and its current native-gas
+	// balance once at startup. Implementations should be a no-op when no
+	// minter key is configured (watch-only mode).
+	LogMinterBalance(
+		ctx context.Context,
+		logger log.Logger,
+	)
 }

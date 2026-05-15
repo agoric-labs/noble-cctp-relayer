@@ -23,43 +23,46 @@ type AppState struct {
 
 	Debug bool
 
-	LogLevel string
-
 	Logger log.Logger
+
+	LogFormat string
+
+	LogLevel string
 }
 
 func NewAppState() *AppState {
 	return &AppState{}
 }
 
-// InitAppState checks if a logger and config are present. If not, it adds them to the AppState
 func (a *AppState) InitAppState() {
-	if a.Logger == nil {
-		a.InitLogger()
-	}
-	if a.Config == nil {
-		a.loadConfigFile()
-	}
+	a.loadConfigFile()
 }
 
 func (a *AppState) InitLogger() {
 	// info level is default
 	level := zerolog.InfoLevel
+
 	switch a.LogLevel {
 	case "debug":
 		level = zerolog.DebugLevel
-	case "warn":
-		level = zerolog.WarnLevel
 	case "error":
 		level = zerolog.ErrorLevel
+	case "warn":
+		level = zerolog.WarnLevel
 	}
 
 	// a.Debug overrides a.loglevel
 	if a.Debug {
-		a.Logger = log.NewLogger(os.Stdout, log.LevelOption(zerolog.DebugLevel))
-	} else {
-		a.Logger = log.NewLogger(os.Stdout, log.LevelOption(level))
+		level = zerolog.DebugLevel
 	}
+
+	opts := []log.Option{log.LevelOption(level)}
+
+	if a.LogFormat == LogFormatJSON {
+		opts = append(opts, log.OutputJSONOption())
+	}
+
+	a.Logger = log.NewLogger(os.Stdout, opts...)
 }
 
 // loadConfigFile loads a configuration into the AppState. It uses the AppState ConfigPath
@@ -68,18 +71,21 @@ func (a *AppState) loadConfigFile() {
 	if a.Logger == nil {
 		a.InitLogger()
 	}
-	config, err := ParseConfig(a.ConfigPath)
-	if err != nil {
-		a.Logger.Error("Unable to parse config file", "location", a.ConfigPath, "err", err)
-		os.Exit(1)
-	}
-	a.Logger.Info("Successfully parsed config file", "location", a.ConfigPath)
-	a.Config = config
 
-	err = a.validateConfig()
-	if err != nil {
-		a.Logger.Error("Invalid config", "err", err)
-		os.Exit(1)
+	if a.Config == nil {
+		config, err := ParseConfig(a.ConfigPath)
+		if err != nil {
+			a.Logger.Error("Unable to parse config file", "location", a.ConfigPath, "err", err)
+			os.Exit(1)
+		}
+		a.Logger.Info("Successfully parsed config file", "location", a.ConfigPath)
+		a.Config = config
+
+		err = a.validateConfig()
+		if err != nil {
+			a.Logger.Error("Invalid config", "err", err)
+			os.Exit(1)
+		}
 	}
 }
 

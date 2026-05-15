@@ -1,6 +1,7 @@
 .idea
-noble-cctp-relayer
 .ignore
 .env
+build
+noble-cctp-relayer
 
 

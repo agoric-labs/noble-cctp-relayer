@@ -213,6 +213,11 @@ func (n *Noble) attemptBroadcast(
 
 	logger.Info(fmt.Sprintf("Successfully broadcast %s to Noble.  Tx hash: %s", msgs[0].SourceTxHash, msgs[0].DestTxHash))
 
+	// Surface the minter address (and noble's "no-gas" note) after each
+	// successful mint. Mirrors the ethereum broadcaster's balance log so
+	// operators have a consistent post-broadcast signal to alert on.
+	n.LogMinterBalance(ctx, logger)
+
 	return nil
 }
 

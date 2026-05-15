@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/hex"
+	"os"
 	"testing"
 	"time"
 
@@ -43,6 +44,11 @@ import (
 // This test uses the Sepolia wallet in the config as the destination caller to ensure that
 // to ensure that this instance of the relayer picks up the transaction
 func TestNobleBurnToEthMint(t *testing.T) {
+	const configPath = "../.ignore/testnet.yaml"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Skipf("skipping: %s not present (integration test config with secrets is git-ignored)", configPath)
+	}
+
 	a := cmd.NewAppState()
 	a.LogLevel = "debug"
 	a.InitLogger()
@@ -50,16 +56,16 @@ func TestNobleBurnToEthMint(t *testing.T) {
 	ctx := context.Background()
 
 	// Relayer config
-	cfg, err := cmd.ParseConfig("../.ignore/testnet.yaml")
+	cfg, err := cmd.ParseConfig(configPath)
 	require.NoError(t, err)
 	a.Config = cfg
 
 	nobleCfg := cfg.Chains["noble"].(*noble.ChainConfig)
 	ethCfg := cfg.Chains["sepolia"].(*ethereum.ChainConfig)
 
-	nobleChain, err := nobleCfg.Chain("noble")
+	nobleChain, err := nobleCfg.Chain("noble", false)
 	require.NoError(t, err)
-	ethChain, err := ethCfg.Chain("eth")
+	ethChain, err := ethCfg.Chain("eth", false)
 	require.NoError(t, err)
 
 	err = nobleChain.InitializeClients(ctx, a.Logger)

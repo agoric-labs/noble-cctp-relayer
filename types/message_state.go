@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/circlefin/noble-cctp/x/cctp/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -47,6 +46,14 @@ type MessageState struct {
 	Created           time.Time
 	Updated           time.Time
 	Nonce             uint64
+	MsgVersion        uint32 // CCTP envelope version (0 = v1, 1 = v2)
+
+	// IrisMessage is the message bytes returned by Iris v2 for this tx —
+	// differs from MsgSentBytes because Iris populates `nonce` and
+	// `finalityThresholdExecuted` before signing. When non-nil it MUST be
+	// passed to receiveMessage; using MsgSentBytes instead reverts with
+	// "Invalid signature: not attester". Empty for v1.
+	IrisMessage []byte
 }
 
 // EvmLogToMessageState transforms an evm log into a messageState given an ABI
@@ -56,8 +63,14 @@ func EvmLogToMessageState(abi abi.ABI, messageSent abi.Event, log *ethtypes.Log)
 		return nil, fmt.Errorf("unable to unpack evm log. error: %w", err)
 	}
 
-	rawMessageSentBytes := event["message"].([]byte)
-	message, _ := new(types.Message).Parse(rawMessageSentBytes)
+	rawMessageSentBytes, ok := event["message"].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("MessageSent.message field missing or not []byte")
+	}
+	message, err := new(Message).Parse(rawMessageSentBytes)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse CCTP Message header: %w", err)
+	}
 
 	hashed := crypto.Keccak256(rawMessageSentBytes)
 	hashedHexStr := hex.EncodeToString(hashed)
@@ -72,15 +85,21 @@ func EvmLogToMessageState(abi abi.ABI, messageSent abi.Event, log *ethtypes.Log)
 		MsgBody:           message.MessageBody,
 		DestinationCaller: message.DestinationCaller,
 		Nonce:             message.Nonce,
+		MsgVersion:        message.Version,
 		Created:           time.Now(),
 		Updated:           time.Now(),
 	}
 
-	if _, err := new(BurnMessage).Parse(message.MessageBody); err == nil {
-		return messageState, nil
+	// BurnMessage.Parse is version-aware (v1 = 132 bytes, v2 >= 228 bytes).
+	// We deliberately do NOT fall back to MetadataMessage: that body type
+	// belongs to Noble's IBC-forwarding metadata, not burns, and the fallback
+	// would mask version-mismatch parse failures by silently accepting any
+	// body >= 112 bytes — including v2 burns parsed at v1 offsets.
+	if _, err := new(BurnMessage).Parse(message.MessageBody); err != nil {
+		return nil, fmt.Errorf("not a CCTP burn message (version=%d, body=%d bytes): %w",
+			message.Version, len(message.MessageBody), err)
 	}
-
-	return nil, fmt.Errorf("unable to parse tx into message, err: %w", err)
+	return messageState, nil
 }
 
 // Equal checks if two MessageState instances are equal

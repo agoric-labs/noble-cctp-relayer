@@ -22,13 +22,13 @@ func init() {
 }
 
 func TestAttestationIsReady(t *testing.T) {
-	resp := circle.CheckAttestation(cfg.Circle.AttestationBaseURL, logger, "85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
+	resp := circle.CheckAttestation(cfg.Circle, logger, "85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
 	require.NotNil(t, resp)
 	require.Equal(t, "complete", resp.Status)
 }
 
 func TestAttestationNotFound(t *testing.T) {
-	resp := circle.CheckAttestation(cfg.Circle.AttestationBaseURL, logger, "not an attestation", "", 0, 4)
+	resp := circle.CheckAttestation(cfg.Circle, logger, "not an attestation", "", 0, 4)
 	require.Nil(t, resp)
 }
 
@@ -36,7 +36,7 @@ func TestAttestationWithoutEndingSlash(t *testing.T) {
 	startURL := cfg.Circle.AttestationBaseURL
 	cfg.Circle.AttestationBaseURL = startURL[:len(startURL)-1]
 
-	resp := circle.CheckAttestation(cfg.Circle.AttestationBaseURL, logger, "85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
+	resp := circle.CheckAttestation(cfg.Circle, logger, "85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
 	require.NotNil(t, resp)
 	require.Equal(t, "complete", resp.Status)
 
@@ -44,7 +44,7 @@ func TestAttestationWithoutEndingSlash(t *testing.T) {
 }
 
 func TestAttestationWithLeading0x(t *testing.T) {
-	resp := circle.CheckAttestation(cfg.Circle.AttestationBaseURL, logger, "0x85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
+	resp := circle.CheckAttestation(cfg.Circle, logger, "0x85bbf7e65a5992e6317a61f005e06d9972a033d71b514be183b179e1b47723fe", "", 0, 4)
 	require.NotNil(t, resp)
 	require.Equal(t, "complete", resp.Status)
 }

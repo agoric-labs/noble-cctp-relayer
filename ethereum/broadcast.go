@@ -51,6 +51,25 @@ func (e *Ethereum) Broadcast(
 		return fmt.Errorf("unable to create auth: %w", err)
 	}
 
+	// Pin EIP-1559 fee caps when configured. Leaving them nil makes the
+	// binding library call eth_maxPriorityFeePerGas + 2*baseFee at tx time,
+	// which on Base reserves ~12 gwei * gasLimit (~0.0024 ETH) per attempt
+	// regardless of actual gas use. Setting an explicit cap drops that
+	// pre-flight reservation to cap * gasLimit.
+	if e.maxFeePerGas > 0 {
+		auth.GasFeeCap = new(big.Int).SetUint64(e.maxFeePerGas)
+	}
+	if e.maxPriorityFeePerGas > 0 {
+		auth.GasTipCap = new(big.Int).SetUint64(e.maxPriorityFeePerGas)
+	}
+	// Skip eth_estimateGas when an explicit gas limit is configured. Some
+	// RPC providers (e.g. Alchemy on Base) enforce a balance check during
+	// estimation using `fee-cap × block_gas_limit`, which inflates the
+	// reservation far beyond actual cost; pinning a gas limit bypasses it.
+	if e.gasLimit > 0 {
+		auth.GasLimit = e.gasLimit
+	}
+
 	messageTransmitter, err := contracts.NewMessageTransmitter(common.HexToAddress(e.messageTransmitterAddress), backend)
 	if err != nil {
 		return fmt.Errorf("unable to create message transmitter: %w", err)
@@ -154,9 +173,17 @@ func (e *Ethereum) attemptBroadcast(
 	}
 
 	// broadcast txn
+	// For CCTP v2, Iris populates `nonce` and `finalityThresholdExecuted`
+	// in the message bytes before signing. Submitting the raw event bytes
+	// would revert with "Invalid signature: not attester" — use Iris's
+	// version when available, otherwise fall back to the event bytes (v1).
+	messageBytes := msg.MsgSentBytes
+	if len(msg.IrisMessage) > 0 {
+		messageBytes = msg.IrisMessage
+	}
 	tx, err := messageTransmitter.ReceiveMessage(
 		auth,
-		msg.MsgSentBytes,
+		messageBytes,
 		attestationBytes,
 	)
 	if err == nil {
@@ -165,6 +192,10 @@ func (e *Ethereum) attemptBroadcast(
 		msg.DestTxHash = tx.Hash().Hex()
 
 		logger.Info(fmt.Sprintf("Successfully broadcast %s to Ethereum.  Tx hash: %s", msg.SourceTxHash, msg.DestTxHash))
+
+		// Log the minter's current native balance so operators can alert
+		// on low-balance thresholds. Cheap: one eth_getBalance per mint.
+		e.LogMinterBalance(ctx, logger)
 
 		return nil
 	}

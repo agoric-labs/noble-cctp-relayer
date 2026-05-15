@@ -19,7 +19,7 @@ func TestStartListener(t *testing.T) {
 
 	nobleCfg.StartBlock = 3273557
 
-	n, err := nobleCfg.Chain("noble")
+	n, err := nobleCfg.Chain("noble", false)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

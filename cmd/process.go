@@ -1,19 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
-	cctptypes "github.com/circlefin/noble-cctp/x/cctp/types"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 
 	"cosmossdk.io/log"
-	"cosmossdk.io/math"
 
 	"github.com/strangelove-ventures/noble-cctp-relayer/circle"
 	"github.com/strangelove-ventures/noble-cctp-relayer/ethereum"
@@ -52,19 +54,50 @@ func Start(a *AppState) *cobra.Command {
 				return fmt.Errorf("invalid flush only flag error=%w", err)
 			}
 
+			watchOnly, err := cmd.Flags().GetBool(flagWatchOnly)
+			if err != nil {
+				return fmt.Errorf("invalid watch-only flag error=%w", err)
+			}
+
+			if watchOnly && flushOnly {
+				return fmt.Errorf("--watch-only and --flush-only-mode are mutually exclusive")
+			}
+
 			if flushInterval == 0 {
 				if flushOnly {
 					return fmt.Errorf("flush only mode requires a flush interval")
-				} else {
+				} else if !watchOnly {
 					logger.Error("Flush interval not set. Use the --flush-interval flag to set a reoccurring flush")
 				}
 			}
 
-			// start API on normal relayer only
-			go startAPI(a)
+			if watchOnly {
+				logger.Info("Starting in watch-only mode: no broadcasting, no processor pool, no HTTP API",
+					"accept_permissionless_callers", cfg.AcceptPermissionlessCallers)
+			}
+
+			// HTTP API is only useful for inspecting in-progress state in
+			// non-watch modes (watch-only never enqueues into State).
+			if !watchOnly {
+				go startAPI(a)
+			}
 
 			// messageState processing queue
-			var processingQueue = make(chan *types.TxState, 10000)
+			processingQueue := make(chan *types.TxState, 10000)
+
+			// In watch-only mode the listener still pushes parsed messages
+			// into the queue; drain them so it never blocks.
+			if watchOnly {
+				go func() {
+					for {
+						select {
+						case <-cmd.Context().Done():
+							return
+						case <-processingQueue:
+						}
+					}
+				}()
+			}
 
 			registeredDomains := make(map[types.Domain]types.Chain)
 
@@ -81,7 +114,7 @@ func Start(a *AppState) *cobra.Command {
 			metrics := relayer.InitPromMetrics(address, port)
 
 			for name, cfg := range cfg.Chains {
-				c, err := cfg.Chain(name)
+				c, err := cfg.Chain(name, watchOnly)
 				if err != nil {
 					return fmt.Errorf("error creating chain error=%w", err)
 				}
@@ -107,13 +140,18 @@ func Start(a *AppState) *cobra.Command {
 					}
 				}
 
-				if err := c.InitializeBroadcaster(cmd.Context(), logger, sequenceMap); err != nil {
-					return fmt.Errorf("error initializing broadcaster error=%w", err)
+				if !watchOnly {
+					if err := c.InitializeBroadcaster(cmd.Context(), logger, sequenceMap); err != nil {
+						return fmt.Errorf("error initializing broadcaster error=%w", err)
+					}
+					c.LogMinterBalance(cmd.Context(), logger)
 				}
 
 				go c.StartListener(cmd.Context(), logger, processingQueue, flushOnly, flushInterval)
 
-				go c.WalletBalanceMetric(cmd.Context(), a.Logger, metrics)
+				if !watchOnly {
+					go c.WalletBalanceMetric(cmd.Context(), a.Logger, metrics)
+				}
 
 				if _, ok := registeredDomains[c.Domain()]; ok {
 					return fmt.Errorf("duplicate domain found domain=%d name=%s", c.Domain(), c.Name())
@@ -122,9 +160,11 @@ func Start(a *AppState) *cobra.Command {
 				registeredDomains[c.Domain()] = c
 			}
 
-			// spin up Processor worker pool
-			for i := 0; i < int(cfg.ProcessorWorkerCount); i++ {
-				go StartProcessor(cmd.Context(), a, registeredDomains, processingQueue, sequenceMap, metrics)
+			// spin up Processor worker pool (skipped in watch-only mode)
+			if !watchOnly {
+				for i := 0; i < int(cfg.ProcessorWorkerCount); i++ {
+					go StartProcessor(cmd.Context(), a, registeredDomains, processingQueue, sequenceMap, metrics)
+				}
 			}
 
 			// wait for context to be done
@@ -171,12 +211,12 @@ func StartProcessor(
 			}
 		}
 
-		var broadcastMsgs = make(map[types.Domain][]*types.MessageState)
+		broadcastMsgs := make(map[types.Domain][]*types.MessageState)
 		var requeue bool
 		for _, msg := range tx.Msgs {
 			// if a filter's condition is met, mark as filtered
 			if FilterDisabledCCTPRoutes(cfg, logger, msg) ||
-				filterInvalidDestinationCallers(registeredDomains, logger, msg) ||
+				filterInvalidDestinationCallers(cfg, registeredDomains, logger, msg) ||
 				filterLowTransfers(cfg, logger, msg) {
 				State.Mu.Lock()
 				msg.Status = types.Filtered
@@ -185,7 +225,7 @@ func StartProcessor(
 
 			// if the message is burned or pending, check for an attestation
 			if msg.Status == types.Created || msg.Status == types.Pending {
-				response := circle.CheckAttestation(cfg.Circle.AttestationBaseURL, logger, msg.IrisLookupID, msg.SourceTxHash, msg.SourceDomain, msg.DestDomain)
+				response := circle.CheckAttestation(cfg.Circle, logger, msg.IrisLookupID, msg.SourceTxHash, msg.SourceDomain, msg.DestDomain)
 
 				switch {
 				case response == nil:
@@ -209,6 +249,14 @@ func StartProcessor(
 					State.Mu.Lock()
 					msg.Status = types.Attested
 					msg.Attestation = response.Attestation
+					if response.Message != "" {
+						bz, decodeErr := hex.DecodeString(strings.TrimPrefix(response.Message, "0x"))
+						if decodeErr != nil {
+							logger.Error("unable to decode Iris message bytes", "tx", msg.SourceTxHash, "err", decodeErr)
+						} else {
+							msg.IrisMessage = bz
+						}
+					}
 					msg.Updated = time.Now()
 					broadcastMsgs[msg.DestDomain] = append(broadcastMsgs[msg.DestDomain], msg)
 					State.Mu.Unlock()
@@ -271,8 +319,10 @@ func FilterDisabledCCTPRoutes(cfg *types.Config, logger log.Logger, msg *types.M
 	return true
 }
 
-// filterInvalidDestinationCallers returns true if the minter is not the destination caller for the specified domain
-func filterInvalidDestinationCallers(registeredDomains map[types.Domain]types.Chain, logger log.Logger, msg *types.MessageState) bool {
+// filterInvalidDestinationCallers returns true (filter out) if the message's
+// destinationCaller is neither this relayer's minter nor (when permissionless
+// callers are accepted) the zero address.
+func filterInvalidDestinationCallers(cfg *types.Config, registeredDomains map[types.Domain]types.Chain, logger log.Logger, msg *types.MessageState) bool {
 	chain, ok := registeredDomains[msg.DestDomain]
 	if !ok {
 		logger.Error("No chain registered for domain", "domain", msg.DestDomain)
@@ -280,8 +330,15 @@ func filterInvalidDestinationCallers(registeredDomains map[types.Domain]types.Ch
 	}
 	validCaller, address := chain.IsDestinationCaller(msg.DestinationCaller)
 
+	// IsDestinationCaller treats the zero address as valid; honor the
+	// permissionless-callers config by rejecting it explicitly when disabled.
+	if validCaller && !cfg.AcceptPermissionlessCallers && bytes.Equal(msg.DestinationCaller, make([]byte, 32)) {
+		logger.Info(fmt.Sprintf("Filtered tx %s from %d to %d: destinationCaller is permissionless (zero) and accept-permissionless-callers is false",
+			msg.SourceTxHash, msg.SourceDomain, msg.DestDomain))
+		return true
+	}
+
 	if validCaller {
-		// we do not want to filter this message if valid caller
 		return false
 	}
 
@@ -292,7 +349,7 @@ func filterInvalidDestinationCallers(registeredDomains map[types.Domain]types.Ch
 
 // filterLowTransfers returns true if the amount being transferred to the destination chain is lower than the min-mint-amount configured
 func filterLowTransfers(cfg *types.Config, logger log.Logger, msg *types.MessageState) bool {
-	bm, err := new(cctptypes.BurnMessage).Parse(msg.MsgBody)
+	bm, err := new(types.BurnMessage).Parse(msg.MsgBody)
 	if err != nil {
 		logger.Info("This is not a burn message", "err", err)
 		return true
@@ -320,13 +377,13 @@ func filterLowTransfers(cfg *types.Config, logger log.Logger, msg *types.Message
 		}
 	}
 
-	if bm.Amount.LT(math.NewIntFromUint64(minBurnAmount)) {
+	if bm.Amount.Cmp(new(big.Int).SetUint64(minBurnAmount)) < 0 {
 		logger.Info(
 			"Filtered tx because the transfer amount is less than the minimum allowed amount",
 			"dest domain", msg.DestDomain,
 			"source_domain", msg.SourceDomain,
 			"source_tx", msg.SourceTxHash,
-			"amount", bm.Amount,
+			"amount", bm.Amount.String(),
 			"min_amount", minBurnAmount,
 		)
 		return true

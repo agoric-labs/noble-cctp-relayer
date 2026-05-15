@@ -60,15 +60,21 @@ func NewChain(
 	blockQueueChannelSize uint64,
 	minAmount uint64,
 ) (*Noble, error) {
-	keyBz, err := hex.DecodeString(privateKey)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse noble private key: %w", err)
+	// An empty private key is allowed (watch-only mode). Broadcasting paths
+	// must guard with a non-nil privateKey check.
+	var (
+		privKeyPtr    *secp256k1.PrivKey
+		minterAddress string
+	)
+	if privateKey != "" {
+		keyBz, err := hex.DecodeString(privateKey)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse noble private key: %w", err)
+		}
+		pk := secp256k1.PrivKey{Key: keyBz}
+		privKeyPtr = &pk
+		minterAddress = sdk.MustBech32ifyAddressBytes("noble", pk.PubKey().Address())
 	}
-
-	privKey := secp256k1.PrivKey{Key: keyBz}
-
-	address := privKey.PubKey().Address()
-	minterAddress := sdk.MustBech32ifyAddressBytes("noble", address)
 
 	return &Noble{
 		chainID:               chainID,
@@ -76,7 +82,7 @@ func NewChain(
 		startBlock:            startBlock,
 		lookbackPeriod:        lookbackPeriod,
 		workers:               workers,
-		privateKey:            &privKey,
+		privateKey:            privKeyPtr,
 		minterAddress:         minterAddress,
 		gasLimit:              gasLimit,
 		txMemo:                txMemo,

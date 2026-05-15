@@ -18,6 +18,9 @@ import (
 )
 
 func TestEthUsedNonce(t *testing.T) {
+	if !testutil.EnvLoaded {
+		t.Skipf("skipping: .env not present at %s (needs SEPOLIA_RPC)", testutil.EnvFile)
+	}
 	err := godotenv.Load(testutil.EnvFile)
 	require.NoError(t, err)
 

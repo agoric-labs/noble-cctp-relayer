@@ -19,19 +19,29 @@ import (
 var logger log.Logger
 var EnvFile = os.ExpandEnv("$GOPATH/src/github.com/strangelove-ventures/noble-cctp-relayer/.env")
 
+// EnvLoaded reports whether the .env file (containing live RPC endpoints +
+// minter keys for integration-style unit tests) was found at package-init
+// time. Tests that need those env vars should skip when this is false so
+// the rest of the package can still run in environments without secrets.
+var EnvLoaded bool
+
 func init() {
-	// define logger
 	logger = log.NewLogger(os.Stdout, log.LevelOption(zerolog.ErrorLevel))
 
-	err := godotenv.Load(EnvFile)
-	if err != nil {
-		logger.Error("error loading env file", "err", err)
-		os.Exit(1)
+	if err := godotenv.Load(EnvFile); err != nil {
+		logger.Error("env file not loaded — env-dependent tests will skip",
+			"file", EnvFile, "err", err)
+		return
 	}
+	EnvLoaded = true
 }
 
 func ConfigSetup(t *testing.T) (a *cmd.AppState, registeredDomains map[types.Domain]types.Chain) {
 	t.Helper()
+
+	if !EnvLoaded {
+		t.Skipf("skipping: .env not present at %s (provide NOBLE_RPC, SEPOLIA_RPC, SEPOLIA_WS to run)", EnvFile)
+	}
 
 	var testConfig = types.Config{
 		Chains: map[string]types.ChainConfig{
@@ -66,7 +76,7 @@ func ConfigSetup(t *testing.T) (a *cmd.AppState, registeredDomains map[types.Dom
 
 	registeredDomains = make(map[types.Domain]types.Chain)
 	for name, cfgg := range a.Config.Chains {
-		c, err := cfgg.Chain(name)
+		c, err := cfgg.Chain(name, false)
 		require.NoError(t, err, "Error creating chain")
 
 		registeredDomains[c.Domain()] = c

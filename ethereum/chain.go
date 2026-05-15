@@ -40,6 +40,10 @@ type Ethereum struct {
 	MetricsDenom              string
 	MetricsExponent           int
 
+	maxFeePerGas         uint64
+	maxPriorityFeePerGas uint64
+	gasLimit             uint64
+
 	mu sync.Mutex
 
 	wsClient  *ethclient.Client
@@ -64,10 +68,22 @@ func NewChain(
 	minAmount uint64,
 	metricsDenom string,
 	metricsExponent int,
+	maxFeePerGas uint64,
+	maxPriorityFeePerGas uint64,
+	gasLimit uint64,
 ) (*Ethereum, error) {
-	privEcdsaKey, ethereumAddress, err := GetEcdsaKeyAddress(privateKey)
-	if err != nil {
-		return nil, err
+	// An empty private key is allowed (watch-only mode). Broadcasting paths
+	// must guard with a non-empty privateKey/minterAddress check.
+	var (
+		privEcdsaKey    *ecdsa.PrivateKey
+		ethereumAddress string
+	)
+	if privateKey != "" {
+		var err error
+		privEcdsaKey, ethereumAddress, err = GetEcdsaKeyAddress(privateKey)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &Ethereum{
 		name:                      name,
@@ -85,6 +101,9 @@ func NewChain(
 		minAmount:                 minAmount,
 		MetricsDenom:              metricsDenom,
 		MetricsExponent:           metricsExponent,
+		maxFeePerGas:              maxFeePerGas,
+		maxPriorityFeePerGas:      maxPriorityFeePerGas,
+		gasLimit:                  gasLimit,
 	}, nil
 }
 

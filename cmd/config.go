@@ -65,12 +65,18 @@ func ParseConfig(file string) (*types.Config, error) {
 		return nil, fmt.Errorf("error unmarshalling config: %w", err)
 	}
 
+	acceptPermissionless := true
+	if cfg.AcceptPermissionlessCallers != nil {
+		acceptPermissionless = *cfg.AcceptPermissionlessCallers
+	}
+
 	c := types.Config{
-		EnabledRoutes:        cfg.EnabledRoutes,
-		Circle:               cfg.Circle,
-		ProcessorWorkerCount: cfg.ProcessorWorkerCount,
-		API:                  cfg.API,
-		Chains:               make(map[string]types.ChainConfig),
+		AcceptPermissionlessCallers: acceptPermissionless,
+		API:                         cfg.API,
+		Chains:                      make(map[string]types.ChainConfig),
+		Circle:                      cfg.Circle,
+		EnabledRoutes:               cfg.EnabledRoutes,
+		ProcessorWorkerCount:        cfg.ProcessorWorkerCount,
 	}
 
 	for name, chain := range cfg.Chains {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math/big"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -44,7 +45,11 @@ import (
 
 // Test noble burn to Eth deposit on actively deployed relayer
 func TestNobleBurnToEthDeployed(t *testing.T) {
-	c, err := ParseIntegration("../.ignore/integration.yaml")
+	const configPath = "../.ignore/integration.yaml"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Skipf("skipping: %s not present (deployed-relayer config with secrets is git-ignored)", configPath)
+	}
+	c, err := ParseIntegration(configPath)
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -191,7 +196,11 @@ func TestNobleBurnToEthDeployed(t *testing.T) {
 
 // Test Eth/L2 burn to Noble deposit on actively deployed relayer
 func TestEthBurnToNobleDeployed(t *testing.T) {
-	c, err := ParseIntegration("../.ignore/integration.yaml")
+	const configPath = "../.ignore/integration.yaml"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Skipf("skipping: %s not present (deployed-relayer config with secrets is git-ignored)", configPath)
+	}
+	c, err := ParseIntegration(configPath)
 	require.NoError(t, err)
 	ctx := context.Background()
 
