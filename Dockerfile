@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.20-alpine AS build-env
+FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS build-env
 
 RUN apk add --update --no-cache curl make git libc-dev bash gcc linux-headers eudev-dev
 
@@ -91,3 +91,6 @@ COPY --from=busybox-min --chown=100:1000 /home/strangelove /home/strangelove
 
 WORKDIR /home/strangelove
 USER strangelove
+
+ENTRYPOINT ["/bin/noble-cctp-relayer"]
+CMD ["start", "--config", "/source/config.yaml", "--log-format", "json"]

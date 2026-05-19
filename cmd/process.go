@@ -229,11 +229,11 @@ func StartProcessor(
 
 				switch {
 				case response == nil:
-					logger.Debug("Attestation is still processing for 0x" + msg.IrisLookupID + ".  Retrying...")
+					logger.Info("Attestation is still processing for 0x" + msg.IrisLookupID + ".  Retrying...")
 					requeue = true
 					continue
 				case msg.Status == types.Created && response.Status == "pending_confirmations":
-					logger.Debug("Attestation is created but still pending confirmations for 0x" + msg.IrisLookupID + ".  Retrying...")
+					logger.Info("Attestation is created but still pending confirmations for 0x" + msg.IrisLookupID + ".  Retrying...")
 					State.Mu.Lock()
 					msg.Status = types.Pending
 					msg.Updated = time.Now()
@@ -241,11 +241,11 @@ func StartProcessor(
 					requeue = true
 					continue
 				case response.Status == "pending_confirmations":
-					logger.Debug("Attestation is still pending for 0x" + msg.IrisLookupID + ".  Retrying...")
+					logger.Info("Attestation is still pending for 0x" + msg.IrisLookupID + ".  Retrying...")
 					requeue = true
 					continue
 				case response.Status == "complete":
-					logger.Debug("Attestation is complete for 0x" + msg.IrisLookupID + ".")
+					logger.Info("Attestation is complete for 0x" + msg.IrisLookupID + ".")
 					State.Mu.Lock()
 					msg.Status = types.Attested
 					msg.Attestation = response.Attestation
