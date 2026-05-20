@@ -21,6 +21,12 @@ type Message struct {
 	MessageBody       []byte
 }
 
+// ErrNotBurnMessage signals that a parsed CCTP `MessageSent` payload is not a
+// USDC burn (likely a non-burn application of the shared MessageTransmitter,
+// e.g. Hyperlane). Callers should treat this as "skip silently" rather than a
+// real parse failure.
+var ErrNotBurnMessage = errors.New("not a CCTP burn message")
+
 // BurnMessage defines ...
 // https://github.com/circlefin/evm-cctp-contracts/blob/d53f0e1937a0a5c5158d356b6767b77dc32dcc90/src/messages/BurnMessage.sol#L24-L29
 type BurnMessage struct {
@@ -139,7 +145,7 @@ func (c *BurnMessage) Parse(bz []byte) (*BurnMessage, error) {
 	case len(bz) > 227:
 		// v2 burn body
 	default:
-		return nil, fmt.Errorf("BurnMessage length %d does not match v1 (=132) or v2 (>=228)", len(bz))
+		return nil, fmt.Errorf("%w: BurnMessage length %d does not match v1 (=132) or v2 (>=228)", ErrNotBurnMessage, len(bz))
 	}
 
 	c.Version = binary.BigEndian.Uint32(bz[VersionIndex:BurnTokenIndex])

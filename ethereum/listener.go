@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -239,7 +240,11 @@ func consumeHistory(
 		historicalLog := history[i]
 		parsedMsg, err := types.EvmLogToMessageState(messageTransmitterABI, messageSent, &historicalLog)
 		if err != nil {
-			logger.Error("Unable to parse history log into MessageState, skipping", "tx hash", historicalLog.TxHash.Hex(), "err", err)
+			if errors.Is(err, types.ErrNotBurnMessage) {
+				logger.Info("Skipping non-burn historical MessageSent", "tx hash", historicalLog.TxHash.Hex(), "err", err)
+			} else {
+				logger.Error("Unable to parse history log into MessageState, skipping", "tx hash", historicalLog.TxHash.Hex(), "err", err)
+			}
 			continue
 		}
 		logger.Info(fmt.Sprintf("New historical msg from source domain %d with tx hash %s", parsedMsg.SourceDomain, parsedMsg.SourceTxHash))
@@ -273,7 +278,11 @@ func (e *Ethereum) consumeStream(
 		case streamLog := <-stream:
 			parsedMsg, err := types.EvmLogToMessageState(messageTransmitterABI, messageSent, &streamLog)
 			if err != nil {
-				logger.Error("Unable to parse ws log into MessageState, skipping", "source tx", streamLog.TxHash.Hex(), "err", err)
+				if errors.Is(err, types.ErrNotBurnMessage) {
+					logger.Info("Skipping non-burn ws MessageSent", "source tx", streamLog.TxHash.Hex(), "err", err)
+				} else {
+					logger.Error("Unable to parse ws log into MessageState, skipping", "source tx", streamLog.TxHash.Hex(), "err", err)
+				}
 				continue
 			}
 			logger.Info(fmt.Sprintf("New stream msg from %d with tx hash %s", parsedMsg.SourceDomain, parsedMsg.SourceTxHash))

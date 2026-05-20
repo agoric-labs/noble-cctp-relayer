@@ -96,8 +96,8 @@ func EvmLogToMessageState(abi abi.ABI, messageSent abi.Event, log *ethtypes.Log)
 	// would mask version-mismatch parse failures by silently accepting any
 	// body >= 112 bytes — including v2 burns parsed at v1 offsets.
 	if _, err := new(BurnMessage).Parse(message.MessageBody); err != nil {
-		return nil, fmt.Errorf("not a CCTP burn message (version=%d, body=%d bytes): %w",
-			message.Version, len(message.MessageBody), err)
+		return nil, fmt.Errorf("%w (version=%d, body=%d bytes): %w",
+			ErrNotBurnMessage, message.Version, len(message.MessageBody), err)
 	}
 	return messageState, nil
 }
