@@ -31,7 +31,12 @@ jobs:
         name: Extract metadata (tags, labels) for Docker
         uses: docker/metadata-action@v6
         with:
+          flavor: |
+            latest=false
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
