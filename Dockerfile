@@ -24,9 +24,11 @@ RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
 
 RUN if [ -d "/go/bin/linux_${TARGETARCH}" ]; then mv /go/bin/linux_${TARGETARCH}/* /go/bin/; fi
 
-# Use minimal busybox from infra-toolkit image for final scratch image
-FROM ghcr.io/strangelove-ventures/infra-toolkit:v0.0.8 AS busybox-min
-RUN addgroup --gid 1000 -S strangelove && adduser --uid 100 -S strangelove -G strangelove
+FROM alpine:3.20 AS rootfs
+RUN apk add --no-cache ca-certificates \
+ && addgroup -g 1000 -S strangelove \
+ && adduser -u 100 -S -G strangelove strangelove \
+ && mkdir -p /home/strangelove
 
 # Use ln and rm from full featured busybox for assembling final image
 FROM busybox:1.34.1-musl AS busybox-full
@@ -41,8 +43,7 @@ WORKDIR /bin
 # Install ln (for making hard links) and rm (for cleanup) from full busybox image (will be deleted, only needed for image assembly)
 COPY --from=busybox-full /bin/ln /bin/rm ./
 
-# Install minimal busybox image as shell binary (will create hardlinks for the rest of the binaries to this data)
-COPY --from=busybox-min /busybox/busybox /bin/sh
+COPY --from=busybox-full /bin/busybox /bin/sh
 
 # Add hard links for read-only utils
 # Will then only have one copy of the busybox minimal binary file with all utils pointing to the same underlying inode
@@ -82,12 +83,11 @@ RUN rm ln rm
 # Install chain binaries
 COPY --from=build-env /bin/noble-cctp-relayer /bin
 
-# Install trusted CA certificates
-COPY --from=busybox-min /etc/ssl/cert.pem /etc/ssl/cert.pem
+COPY --from=rootfs /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
 
 # Install strangelove user
-COPY --from=busybox-min /etc/passwd /etc/passwd
-COPY --from=busybox-min --chown=100:1000 /home/strangelove /home/strangelove
+COPY --from=rootfs /etc/passwd /etc/passwd
+COPY --from=rootfs --chown=100:1000 /home/strangelove /home/strangelove
 
 WORKDIR /home/strangelove
 USER strangelove
