@@ -143,7 +143,7 @@ func (e *Ethereum) startMainStream(
 	latestBlock := e.LatestBlock()
 
 	// start initial stream (start-block and lookback period handled separately)
-	logger.Info("Starting Ethereum listener")
+	logger.Info(fmt.Sprintf("Starting %s listener", e.name))
 
 	query := ethereum.FilterQuery{
 		Addresses: []common.Address{messageTransmitterAddress},

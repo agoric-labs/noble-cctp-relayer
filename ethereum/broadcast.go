@@ -118,6 +118,14 @@ MsgLoop:
 	return broadcastErrors
 }
 
+func accountSequenceFields(local uint64, chain int64, chainOK bool, auth *bind.TransactOpts) []any {
+	fields := []any{"seq_local", local, "seq_used", auth.Nonce.Uint64()}
+	if chainOK {
+		return append(fields, "seq_chain", chain)
+	}
+	return append(fields, "seq_chain_unavailable", true)
+}
+
 func (e *Ethereum) attemptBroadcast(
 	ctx context.Context,
 	logger log.Logger,
@@ -140,10 +148,12 @@ func (e *Ethereum) attemptBroadcast(
 	defer e.mu.Unlock()
 
 	// TODO remove
+	chainNonceOK := false
 	nextNonce, err := GetEthereumAccountNonce(e.rpcURL, e.minterAddress)
 	if err != nil {
-		logger.Error("unable to retrieve account number")
+		logger.Error("Unable to retrieve account number", "err", err)
 	} else {
+		chainNonceOK = true
 		auth.Nonce = big.NewInt(nextNonce)
 	}
 	// TODO end remove
@@ -154,7 +164,7 @@ func (e *Ethereum) attemptBroadcast(
 		Context: ctx,
 	}
 
-	logger.Debug("Checking if nonce was used for broadcast to Ethereum", "source_domain", msg.SourceDomain, "nonce", msg.Nonce)
+	logger.Debug(fmt.Sprintf("Checking if nonce was used for broadcast to %s", e.name), "source_domain", msg.SourceDomain, "nonce", msg.Nonce)
 
 	key := append(
 		common.LeftPadBytes((big.NewInt(int64(msg.SourceDomain))).Bytes(), 4),
@@ -191,7 +201,10 @@ func (e *Ethereum) attemptBroadcast(
 
 		msg.DestTxHash = tx.Hash().Hex()
 
-		logger.Info(fmt.Sprintf("Successfully broadcast %s to Ethereum.  Tx hash: %s", msg.SourceTxHash, msg.DestTxHash))
+		logger.Info(
+			fmt.Sprintf("Successfully broadcast %s to %s.  Tx hash: %s", msg.SourceTxHash, e.name, msg.DestTxHash),
+			accountSequenceFields(nonce, nextNonce, chainNonceOK, auth)...,
+		)
 
 		// Log the minter's current native balance so operators can alert
 		// on low-balance thresholds. Cheap: one eth_getBalance per mint.
@@ -200,7 +213,10 @@ func (e *Ethereum) attemptBroadcast(
 		return nil
 	}
 
-	logger.Error(fmt.Sprintf("error during broadcast: %s", err.Error()))
+	logger.Error(
+		fmt.Sprintf("Error during broadcast: %s", err.Error()),
+		accountSequenceFields(nonce, nextNonce, chainNonceOK, auth)...,
+	)
 	if parsedErr, ok := err.(JSONError); ok {
 		if parsedErr.ErrorCode() == 3 && parsedErr.Error() == "execution reverted: Nonce already used" {
 			msg.Status = types.Complete
