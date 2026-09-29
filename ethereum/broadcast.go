@@ -141,22 +141,30 @@ func (e *Ethereum) attemptBroadcast(
 		msg.DestDomain,
 		msg.SourceTxHash))
 
-	nonce := sequenceMap.Next(e.domain)
-	auth.Nonce = big.NewInt(int64(nonce))
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// TODO remove
 	chainNonceOK := false
-	nextNonce, err := GetEthereumAccountNonce(e.rpcURL, e.minterAddress)
-	if err != nil {
-		logger.Error("Unable to retrieve account number", "err", err)
+	chainNonce, chainNonceErr := GetEthereumAccountNonce(e.rpcURL, e.minterAddress)
+	if chainNonceErr != nil {
+		logger.Error("Unable to retrieve account nonce", "err", chainNonceErr)
 	} else {
 		chainNonceOK = true
-		auth.Nonce = big.NewInt(nextNonce)
 	}
-	// TODO end remove
+
+	nonce := sequenceMap.Next(e.domain)
+	if chainNonceOK && uint64(chainNonce) > nonce {
+		logger.Info(
+			"Local account nonce is behind chain, adopting chain value",
+			"seq_local",
+			nonce,
+			"seq_chain",
+			chainNonce,
+		)
+		nonce = uint64(chainNonce)
+		sequenceMap.Put(e.domain, nonce+1)
+	}
+	auth.Nonce = big.NewInt(int64(nonce))
 
 	// check if nonce already used
 	co := &bind.CallOpts{
@@ -203,7 +211,12 @@ func (e *Ethereum) attemptBroadcast(
 
 		logger.Info(
 			fmt.Sprintf("Successfully broadcast %s to %s.  Tx hash: %s", msg.SourceTxHash, e.name, msg.DestTxHash),
-			accountSequenceFields(nonce, nextNonce, chainNonceOK, auth)...,
+			accountSequenceFields(
+				nonce,
+				chainNonce,
+				chainNonceOK,
+				auth,
+			)...,
 		)
 
 		// Log the minter's current native balance so operators can alert
@@ -215,7 +228,12 @@ func (e *Ethereum) attemptBroadcast(
 
 	logger.Error(
 		fmt.Sprintf("Error during broadcast: %s", err.Error()),
-		accountSequenceFields(nonce, nextNonce, chainNonceOK, auth)...,
+		accountSequenceFields(
+			nonce,
+			chainNonce,
+			chainNonceOK,
+			auth,
+		)...,
 	)
 	if parsedErr, ok := err.(JSONError); ok {
 		if parsedErr.ErrorCode() == 3 && parsedErr.Error() == "execution reverted: Nonce already used" {
